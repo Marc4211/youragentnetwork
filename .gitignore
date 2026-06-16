@@ -1,0 +1,51 @@
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.portable.example
+*.pem
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Runtime data we don't want in git
+data/
+volumes/
+logs/
+*.log
+
+# Build artifacts
+dist/
+build/
+
+# Local copy of the OpenClaw source/docs, kept for offline reference only.
+# Not ours to ship; never commit.
+openclaw-main/
+
+# Claude Code local settings (machine-specific permission allowlist).
+# A shared .claude/settings.json could be committed; the .local one is not.
+.claude/settings.local.json
