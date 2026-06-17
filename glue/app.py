@@ -2967,6 +2967,17 @@ button{padding:.6em 1.2em;background:#1e7add;color:#fff;border:0;border-radius:6
   <h2 style="margin-top:0">People &amp; agents</h2>
   <table><thead><tr><th>person</th><th>agent</th><th>type</th></tr></thead><tbody>{{PEOPLE}}</tbody></table>
 </div>
+<div class="card">
+  <h2 style="margin-top:0">Maintain the chat (Rocket.Chat)</h2>
+  <p class="sub" style="margin:0 0 .6rem">This console manages your team (invites, people, agents). The chat itself runs on Rocket.Chat, which has its own admin area for accounts and for how the interface looks.</p>
+  <p style="margin:.2rem 0 .6rem"><a href="{{RC_ADMIN_URL}}" target="_blank" rel="noopener">Open Rocket.Chat Administration &rarr;</a> <span class="sub">&middot; sign in with this same admin account</span></p>
+  <div class="note">
+    Once in <strong>Administration</strong>:<br>
+    &bull; Add or remove people and change roles: <strong>Users</strong><br>
+    &bull; Replace or remove logos and the favicon (including the Rocket.Chat logo): <strong>Settings &rarr; Assets</strong><br>
+    &bull; Colors, layout, and custom CSS: <strong>Settings &rarr; Layout</strong>
+  </div>
+</div>
 </body></html>"""
 
 
@@ -3056,7 +3067,9 @@ def render_admin(health: dict, invites: list[dict], people: list[dict]) -> str:
             .replace("{{TEAMLINK}}", team_html)
             .replace("{{REACH}}", _html_escape(_reach_note()))
             .replace("{{INVITES}}", inv_rows)
-            .replace("{{PEOPLE}}", ppl_rows))
+            .replace("{{PEOPLE}}", ppl_rows)
+            .replace("{{RC_ADMIN_URL}}",
+                     _html_escape(ROCKETCHAT_PUBLIC_URL.rstrip("/") + "/admin")))
 
 
 @app.get("/admin", response_class=HTMLResponse)
