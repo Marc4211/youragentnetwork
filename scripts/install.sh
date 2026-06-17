@@ -237,6 +237,12 @@ cat <<DONE
  Chat     : $(get_env ROOT_URL)
  Join page: $(get_env ROOT_URL | sed 's#:3000#:8000#')/join   (or http://localhost:8000/join via tunnel)
 
+ Admin console : $(get_env ROOT_URL | sed 's#:3000#:8000#')/admin
+   Invites, team link, people + agents, health. Sign in as $(get_env ADMIN_USERNAME).
+ RocketChat    : $(get_env ROOT_URL)/admin
+   Manage chat users + change the interface. Sign in to the chat as
+   $(get_env ADMIN_USERNAME), then open Administration (Settings -> Layout for branding).
+
  Invite a teammate: send them the join URL above. They pick an
  agent name + personality and are provisioned instantly.
 

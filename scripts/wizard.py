@@ -99,7 +99,11 @@ def result_urls() -> dict:
                 return line.split("=", 1)[1]
         return ""
     root = get("ROOT_URL") or "http://localhost:3000"
-    return {"chat": root, "admin": root.replace(":3000", ":8000") + "/admin"}
+    return {
+        "chat": root,
+        "admin": root.replace(":3000", ":8000") + "/admin",
+        "rcadmin": root + "/admin",
+    }
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -361,7 +365,7 @@ function poll(){
       if(d.ok&&d.urls){
         installed=true;
         document.getElementById('done').style.display='block';
-        document.getElementById('done').innerHTML='<strong>Agent Network is installed.</strong><br>Chat: <a href="'+d.urls.chat+'">'+d.urls.chat+'</a><br>Admin console: <a href="'+d.urls.admin+'">'+d.urls.admin+'</a>';
+        document.getElementById('done').innerHTML='<strong>Agent Network is installed.</strong><br>Chat: <a href="'+d.urls.chat+'">'+d.urls.chat+'</a><br>Admin console (invites, people, health): <a href="'+d.urls.admin+'">'+d.urls.admin+'</a><br>Manage chat users or change the interface: sign in to the chat as admin, then open Administration (<a href="'+d.urls.rcadmin+'">'+d.urls.rcadmin+'</a>).';
       }
       render(); return;
     }
