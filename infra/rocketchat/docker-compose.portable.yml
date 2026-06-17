@@ -1,4 +1,4 @@
-# Portable local-profile stack for Your Agent Network.
+# Portable local-profile stack for youragentnetwork.
 #
 # This is the start of the refactored, portable compose (Refactor Phase 1/4).
 # Differences from the original infra/rocketchat/docker-compose.yml:
@@ -100,6 +100,9 @@ services:
       BOT_USERNAME: ${BOT_USERNAME:-lois}
       ADMIN_USER_ID: ${ADMIN_USER_ID:-}
       ADMIN_PAT: ${ADMIN_PAT:-}
+      # Admin login name (defaults to "admin"); shown on the admin console so the
+      # operator knows which account to use for Rocket.Chat administration too.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       TEAM_CHANNEL_NAME: ${TEAM_CHANNEL_NAME:-general}
       # OpenClaw data dir as the glue sees it (mounted below) and as OpenClaw
       # sees it inside its own container, plus the container name to reload.
