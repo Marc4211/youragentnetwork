@@ -134,6 +134,14 @@ SHARED_KNOWLEDGE_CHANNEL = os.environ.get(
     "SHARED_KNOWLEDGE_CHANNEL", "shared-knowledge"
 )
 
+# Topic shown on the #shared-knowledge channel so members know it is a file
+# inbox, not a chat. Set when the glue first creates the channel.
+SHARED_KNOWLEDGE_CHANNEL_TOPIC = os.environ.get(
+    "SHARED_KNOWLEDGE_CHANNEL_TOPIC",
+    "Drop a file here to add it to the team-wide shared knowledge folder. "
+    "All agents can then read it.",
+)
+
 # OpenClaw provisioning paths and container info.
 # OPENCLAW_DATA_HOST_PATH is where the host's ~/.openclaw is mounted
 # inside the glue container; we read/write workspace files and
@@ -1957,6 +1965,50 @@ async def invite_user_to_team_channel(team_channel_id: str, rc_user_id: str) -> 
     response.raise_for_status()
 
 
+async def ensure_shared_knowledge_channel_id() -> str:
+    """
+    Return the room id of the #shared-knowledge channel, creating it as a
+    public file-inbox channel (with its topic) if it does not exist yet.
+
+    Mirrors ensure_team_channel_id(): idempotent, looks up by name first and
+    only creates when missing, tolerating the rare create race. Agents read the
+    shared folder on disk, not this channel, so only humans are added to it.
+    """
+    admin_http = get_admin_http()
+
+    info = await admin_http.get(
+        "/api/v1/channels.info", params={"roomName": SHARED_KNOWLEDGE_CHANNEL}
+    )
+    if info.status_code == 200 and info.json().get("success"):
+        return info.json()["channel"]["_id"]
+
+    create = await admin_http.post(
+        "/api/v1/channels.create", json={"name": SHARED_KNOWLEDGE_CHANNEL}
+    )
+    if create.status_code == 200 and create.json().get("success"):
+        channel_id = create.json()["channel"]["_id"]
+        # Set the inbox topic on first creation; non-fatal if it fails.
+        try:
+            await admin_http.post(
+                "/api/v1/channels.setTopic",
+                json={"roomId": channel_id, "topic": SHARED_KNOWLEDGE_CHANNEL_TOPIC},
+            )
+        except Exception:
+            log.warning("could not set #%s topic", SHARED_KNOWLEDGE_CHANNEL)
+        return channel_id
+
+    retry = await admin_http.get(
+        "/api/v1/channels.info", params={"roomName": SHARED_KNOWLEDGE_CHANNEL}
+    )
+    if retry.status_code == 200 and retry.json().get("success"):
+        return retry.json()["channel"]["_id"]
+
+    raise RuntimeError(
+        f"could not find or create shared-knowledge channel "
+        f"{SHARED_KNOWLEDGE_CHANNEL!r}: HTTP {create.status_code} {create.text}"
+    )
+
+
 # ============================================================
 #       stage 5: private DM + welcome message
 # ============================================================
@@ -2600,9 +2652,16 @@ async def join_submit(
         team_channel_id = await ensure_team_channel_id()
         await invite_user_to_team_channel(team_channel_id, human_user.get("_id", ""))
         await invite_user_to_team_channel(team_channel_id, agent_rc["rc_user_id"])
+        # #shared-knowledge: a file inbox humans drop into; the glue ingests each
+        # upload into the shared folder that every agent reads. Created on the
+        # first join; only the human is added (agents read the folder, not it).
+        sk_channel_id = await ensure_shared_knowledge_channel_id()
+        await invite_user_to_team_channel(sk_channel_id, human_user.get("_id", ""))
         log.info(
-            "stage 4 done: %s and %s added to team channel %s (%s)",
+            "stage 4 done: %s and %s added to team channel %s (%s); "
+            "%s added to #%s (%s)",
             human_username, agent_rc["username"], TEAM_CHANNEL_NAME, team_channel_id,
+            human_username, SHARED_KNOWLEDGE_CHANNEL, sk_channel_id,
         )
         stage4_ok = True
     except Exception:
