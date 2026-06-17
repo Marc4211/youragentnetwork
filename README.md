@@ -1,4 +1,4 @@
-# youragentnetwork
+# Your Agent Network
 
 A **self-hostable** team chat where every member gets their own AI agent on the
 **OpenClaw you already run**. Each person has a private 1:1 channel with their
@@ -30,9 +30,9 @@ admin console. (Prefer the terminal? `bash scripts/install.sh` does the same wit
 prompts. Want to read the code first? `git clone` this repo and run
 `scripts/get.sh` from inside it.)
 
-> The `curl … | bash` one-liner needs this repo to be public (or an existing
-> checkout on the box). A branded `get.youragent.network` shortcut is a planned
-> follow-up.
+> Want to read the code first? `git clone` this repo and run `scripts/get.sh`
+> from inside it. New here? [get.youragent.network](https://get.youragent.network)
+> explains the product.
 
 The journey: **discover → run one command → finish in the browser wizard → invite
 your team.** See [docs/portability/INGRESS.md](docs/portability/INGRESS.md) for how
@@ -92,15 +92,5 @@ docker compose -f docker-compose.portable.yml up -d --build glue   # redeploy gl
 
 ## Docs
 
-- [docs/portability/DISTRIBUTION_DESIGN.md](docs/portability/DISTRIBUTION_DESIGN.md)
-  — rationale, audience, target architecture, and the hosted-hybrid v2 north star.
-- [docs/portability/PORTABILITY_SPEC.md](docs/portability/PORTABILITY_SPEC.md)
-  — v1 requirements + acceptance criteria.
-- [docs/portability/REFACTOR_CHECKLIST.md](docs/portability/REFACTOR_CHECKLIST.md)
-  — the ordered work, with what's done and what remains.
-- [docs/portability/INGRESS.md](docs/portability/INGRESS.md) — ingress profiles.
-
-## Relationship to the original
-
-Forked from `Marc4211/youragentnetwork` (a single live deployment). This repo is the
-portable, de-branded distribution; changes here are not pushed back to the original.
+- [docs/portability/INGRESS.md](docs/portability/INGRESS.md) — how teammates reach
+  the chat: the `loopback` / `lan` / `tailscale` ingress profiles.
