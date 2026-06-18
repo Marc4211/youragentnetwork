@@ -59,6 +59,7 @@ import sqlite3
 import string
 import time
 from typing import Annotated
+from urllib.parse import quote
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Form, Request
@@ -66,6 +67,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from openai import AsyncOpenAI
 
 from a2a_client import ask_a2a_agent
+from a2a_registry import register_external_a2a_agent, remove_external_a2a_agent
 
 
 # --- logging setup ---
@@ -3197,6 +3199,7 @@ button{padding:.6em 1.2em;background:#1e7add;color:#fff;border:0;border-radius:6
 </style></head><body>
 <h1>{{INSTANCE}}</h1><p class="sub">admin console</p>
 <div style="margin-top:1rem">{{HEALTH}}</div>
+{{NOTICE}}
 <div class="card">
   <h2 style="margin-top:0">Team link</h2>
   <p class="sub" style="margin:0 0 .75rem">One shared link anyone who can reach this server can join with. Turn it off to require single-use invites only.</p>
@@ -3214,8 +3217,20 @@ button{padding:.6em 1.2em;background:#1e7add;color:#fff;border:0;border-radius:6
   <table style="margin-top:1rem"><thead><tr><th>email</th><th>status</th><th>link</th><th></th></tr></thead><tbody>{{INVITES}}</tbody></table>
 </div>
 <div class="card">
+  <h2 style="margin-top:0">Add an external agent</h2>
+  <p class="sub" style="margin:0 0 .75rem">Connect an agent that runs elsewhere and speaks the A2A protocol (its operator gives you a card URL, and a bearer token if it is protected). It joins the team channel as a member; @mention it to talk to it.</p>
+  <form method="post" action="/admin/agents/add" style="display:grid;gap:8px">
+    <input type="url" name="card_url" placeholder="Agent card URL, e.g. https://agent.example.com/" required style="width:100%;box-sizing:border-box">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input type="text" name="name" placeholder="Name (optional; auto-filled from the agent's card)" style="flex:1;min-width:220px">
+      <input type="text" name="bearer_token" placeholder="Bearer token (optional)" style="flex:1;min-width:180px">
+    </div>
+    <div><button type="submit">Add agent</button></div>
+  </form>
+</div>
+<div class="card">
   <h2 style="margin-top:0">People &amp; agents</h2>
-  <table><thead><tr><th>person</th><th>agent</th><th>type</th></tr></thead><tbody>{{PEOPLE}}</tbody></table>
+  <table><thead><tr><th>person</th><th>agent</th><th>type</th><th></th></tr></thead><tbody>{{PEOPLE}}</tbody></table>
 </div>
 <div class="card">
   <h2 style="margin-top:0">Maintain the chat (Rocket.Chat)</h2>
@@ -3232,7 +3247,8 @@ button{padding:.6em 1.2em;background:#1e7add;color:#fff;border:0;border-radius:6
 </body></html>"""
 
 
-def render_admin(health: dict, invites: list[dict], people: list[dict]) -> str:
+def render_admin(health: dict, invites: list[dict], people: list[dict],
+                 ok: str = "", err: str = "") -> str:
     def hp(name, ok):
         bg, fg, mark = ("#e1f5ee", "#0f6e56", "ok") if ok else ("#fcebeb", "#a32d2d", "down")
         return f'<span class="pill" style="background:{bg};color:{fg}">{name}: {mark}</span>'
@@ -3302,19 +3318,50 @@ def render_admin(health: dict, invites: list[dict], people: list[dict]) -> str:
 
     ppl_rows = ""
     for p in people:
+        is_a2a = p.get("type") == "a2a"
+        if is_a2a:
+            person_cell = '<span style="color:#888">External A2A agent</span>'
+            agent_un = _html_escape(p["agent_username"])
+            action_cell = (
+                '<form method="post" action="/admin/agents/remove" style="margin:0" '
+                f'onsubmit="return confirm(\'Remove @{agent_un}?\')">'
+                f'<input type="hidden" name="username" value="{agent_un}">'
+                '<button type="submit" style="background:#fff;color:#a32d2d;'
+                'border:1px solid #e6c2c2;padding:.3em .7em;font-size:12px">Remove</button>'
+                '</form>'
+            )
+        else:
+            person_cell = (
+                f'{_html_escape(p["human_name"])} '
+                f'<span style="color:#999">@{_html_escape(p["human_username"])}</span>'
+            )
+            action_cell = ""
         ppl_rows += (
-            f'<tr><td style="padding:6px 8px">{_html_escape(p["human_name"])} '
-            f'<span style="color:#999">@{_html_escape(p["human_username"])}</span></td>'
+            f'<tr><td style="padding:6px 8px">{person_cell}</td>'
             f'<td style="padding:6px 8px">{_html_escape(p["agent_display_name"])} '
             f'<span style="color:#999">@{_html_escape(p["agent_username"])}</span></td>'
-            f'<td style="padding:6px 8px;color:#999">{_html_escape(p["type"])}</td></tr>'
+            f'<td style="padding:6px 8px;color:#999">{_html_escape(p["type"])}</td>'
+            f'<td style="padding:6px 8px;text-align:right">{action_cell}</td></tr>'
         )
     if not ppl_rows:
-        ppl_rows = '<tr><td colspan="3" style="padding:10px 8px;color:#888">No one has joined yet.</td></tr>'
+        ppl_rows = '<tr><td colspan="4" style="padding:10px 8px;color:#888">No one has joined yet.</td></tr>'
+
+    notice_html = ""
+    if err:
+        notice_html = (
+            '<div class="card" style="border-color:#e6c2c2;background:#fcebeb;'
+            f'color:#a32d2d;margin-top:1rem">{_html_escape(err)}</div>'
+        )
+    elif ok:
+        notice_html = (
+            '<div class="card" style="border-color:#9fe1cb;background:#e1f5ee;'
+            f'color:#0f6e56;margin-top:1rem">{_html_escape(ok)}</div>'
+        )
 
     return (ADMIN_HTML
             .replace("{{INSTANCE}}", _html_escape(INSTANCE_NAME))
             .replace("{{HEALTH}}", health_html)
+            .replace("{{NOTICE}}", notice_html)
             .replace("{{TEAMLINK}}", team_html)
             .replace("{{REACH}}", _html_escape(_reach_note()))
             .replace("{{INVITES}}", inv_rows)
@@ -3325,11 +3372,58 @@ def render_admin(health: dict, invites: list[dict], people: list[dict]) -> str:
 
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_console(request: Request):
+async def admin_console(request: Request, ok: str = "", err: str = ""):
     if not await require_admin(request):
         return _admin_challenge()
     health = await _stack_health()
-    return HTMLResponse(render_admin(health, list_invites(), list_people()))
+    return HTMLResponse(render_admin(health, list_invites(), list_people(), ok=ok, err=err))
+
+
+@app.post("/admin/agents/add")
+async def admin_add_agent(
+    request: Request,
+    card_url: Annotated[str, Form()] = "",
+    name: Annotated[str, Form()] = "",
+    bearer_token: Annotated[str, Form()] = "",
+):
+    """Register an external A2A agent from its card URL (+ optional bearer token).
+    Reuses the same logic as scripts/setup_a2a_agent.py via a2a_registry."""
+    if not await require_admin(request):
+        return _admin_challenge()
+    try:
+        res = await asyncio.to_thread(
+            register_external_a2a_agent,
+            card_url=card_url, bearer_token=bearer_token, name=name or None,
+            channel_name=TEAM_CHANNEL_NAME, rc_url=ROCKETCHAT_URL,
+            admin_user_id=ADMIN_USER_ID, admin_pat=ADMIN_PAT, db_path=AGENTS_DB_FILE,
+        )
+        verb = "Updated" if res["action"] == "updated" else "Added"
+        msg = (f"{verb} external agent @{res['username']} ({res['display_name']}); "
+               f"it is in #{res['channel']}. @-mention it to talk to it.")
+        return RedirectResponse(f"/admin?ok={quote(msg)}", status_code=303)
+    except Exception as exc:
+        return RedirectResponse(f"/admin?err={quote(str(exc))}", status_code=303)
+
+
+@app.post("/admin/agents/remove")
+async def admin_remove_agent(
+    request: Request,
+    username: Annotated[str, Form()] = "",
+):
+    """Remove an external A2A agent (deletes its bot user + agents row)."""
+    if not await require_admin(request):
+        return _admin_challenge()
+    try:
+        await asyncio.to_thread(
+            remove_external_a2a_agent,
+            username=username, rc_url=ROCKETCHAT_URL,
+            admin_user_id=ADMIN_USER_ID, admin_pat=ADMIN_PAT, db_path=AGENTS_DB_FILE,
+        )
+        clean = username.strip().lstrip("@")
+        return RedirectResponse(f"/admin?ok={quote('Removed external agent @' + clean)}",
+                                status_code=303)
+    except Exception as exc:
+        return RedirectResponse(f"/admin?err={quote(str(exc))}", status_code=303)
 
 
 @app.post("/admin/invites")
