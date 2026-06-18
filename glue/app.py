@@ -627,6 +627,250 @@ async def post_as_agent(agent: dict, channel_id: str, text: str) -> None:
 
 
 # ============================================================
+#   Agent action tools: message_human + ask_agent
+#
+#   Agents are invoked with these as OpenAI-style tools (tool_choice=auto), so a
+#   normal reply ignores them. They fire only when the operator asks the agent to
+#   message a teammate or to find something out from another agent. Both are
+#   operator-initiated and loop-safe by construction:
+#     - message_human posts into the agent's own 1:1 DM; the webhook ignores
+#       agent-authored posts, so it never re-fires.
+#     - ask_agent queries other agents OFF the chat plane and invokes each target
+#       WITHOUT tools, so it cannot fan out further (one hop) and nothing is
+#       posted to chat. The asking agent is never queried; fan-out is bounded.
+# ============================================================
+
+# Bound tool round-trips per turn so a misbehaving model can't loop forever.
+MAX_TOOL_ITERS = 5
+# Cap how many agents one ask_agent call can fan out to (bounds cost).
+MAX_ASK_AGENTS = 5
+
+
+def find_human_by_username(username: str) -> dict | None:
+    """Look up a teammate (human) by Rocket.Chat username (case-insensitive)."""
+    with sqlite3.connect(AGENTS_DB_FILE) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT human_username, human_name, human_rc_user_id FROM agents "
+            "WHERE LOWER(human_username)=LOWER(?)",
+            (username,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+MESSAGE_HUMAN_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "message_human",
+        "description": (
+            "Send a direct message to a teammate (a human on the platform) on the "
+            "operator's behalf. Use this ONLY when the operator explicitly asks you "
+            "to message, notify, or ask someone something. The message is posted "
+            "into your 1:1 direct message with that person, in your own voice."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "human": {
+                    "type": "string",
+                    "description": "The teammate's Rocket.Chat username, e.g. 'tushar'.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "The message to send, in your own voice.",
+                },
+            },
+            "required": ["human", "text"],
+        },
+    },
+}
+
+ASK_AGENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_agent",
+        "description": (
+            "Ask one or more OTHER agents on the platform a question and get their "
+            "answers back, so you can synthesize and answer the operator. Use this "
+            "when the operator asks you to find something out from another teammate's "
+            "agent. You receive the answers directly; nothing is posted to any chat. "
+            "Each agent answers from its own knowledge."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agents": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Agent usernames to ask, e.g. ['niles', 'swamiji'].",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask them, in plain language.",
+                },
+            },
+            "required": ["agents", "question"],
+        },
+    },
+}
+
+# Tools offered on every OpenClaw agent invocation. The model uses them only when
+# relevant (tool_choice=auto); a normal reply ignores them.
+AGENT_TOOLS = [MESSAGE_HUMAN_TOOL, ASK_AGENT_TOOL]
+
+
+async def execute_message_human(asking_agent: dict, args: dict) -> str:
+    """Deliver a DM from `asking_agent` to a target human. Returns a result
+    string for the model (success, or a clear error it can relay)."""
+    target = (args.get("human") or args.get("username") or "").strip().lstrip("@")
+    text = (args.get("text") or args.get("message") or "").strip()
+    if not target or not text:
+        return "error: message_human needs both 'human' (the username) and 'text'."
+    human = find_human_by_username(target)
+    if not human:
+        return (
+            f"error: no teammate found with username '{target}'. "
+            "Use their exact Rocket.Chat username."
+        )
+    try:
+        room_id = await create_dm_as_agent(
+            asking_agent["agent_rc_auth_token"],
+            asking_agent["agent_rc_user_id"],
+            human["human_username"],
+        )
+        await post_as_agent(asking_agent, room_id, text)
+        log.info(
+            "message_human: %s delivered a message to %s",
+            asking_agent["agent_username"], human["human_username"],
+        )
+        return (
+            "Delivered. Your message was posted into your direct message with "
+            f"@{human['human_username']}."
+        )
+    except Exception:
+        log.exception(
+            "message_human failed: %s -> %s", asking_agent["agent_username"], target,
+        )
+        return f"error: could not deliver the message to @{target} (delivery error)."
+
+
+async def execute_ask_agent(asking_agent: dict, args: dict) -> str:
+    """Query one or more OTHER agents directly (OFF the chat plane) and return
+    their answers to the asking agent.
+
+    Loop-free by construction: each target is invoked WITHOUT action tools, so it
+    simply answers and cannot fan out further (depth is capped at one hop), and
+    nothing is posted to chat so the webhook never re-fires. The asking agent
+    itself is never queried; duplicates and the fan-out count are bounded.
+    """
+    raw = args.get("agents") or args.get("agent") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    question = (args.get("question") or args.get("text") or "").strip()
+    if not raw or not question:
+        return "error: ask_agent needs 'agents' (a list of usernames) and 'question'."
+    asker_un = asking_agent["agent_username"]
+    asker_human = (
+        asking_agent.get("human_name") or asking_agent.get("human_username") or "their operator"
+    )
+    results: list[str] = []
+    seen: set[str] = set()
+    for t in list(raw)[:MAX_ASK_AGENTS]:
+        name = str(t).strip().lstrip("@")
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        if key == asker_un.lower():
+            continue  # an agent cannot ask itself
+        target = find_agent_by_username(name)
+        if not target:
+            results.append(f"@{name}: (no agent with that username)")
+            continue
+        framed = (
+            f"{asker_human} (via their agent @{asker_un}) is asking you: {question}\n\n"
+            "Answer from what you know, sharing only what is appropriate to share. "
+            "Keep it brief; if you do not know, say so."
+        )
+        try:
+            if target.get("type") == "a2a":
+                ans = await generate_a2a_reply(target, framed, context_id=f"ask:{asker_un}")
+            else:
+                # NO tools passed: the asked agent just answers and cannot
+                # re-ask, which is what keeps agent-to-agent loop-free.
+                tmodel = target["openclaw_agent"]
+                ans = await ask_openclaw_as(tmodel, framed, f"agent-{tmodel}")
+                if not _is_real_reply(ans):
+                    ans = "(no answer)"
+            log.info("ask_agent: %s queried %s", asker_un, target["agent_username"])
+        except Exception:
+            log.exception("ask_agent: query to %s failed", name)
+            ans = "(error reaching this agent)"
+        results.append(f"@{target['agent_username']} says: {(ans or '').strip()}")
+    return "\n\n".join(results) if results else "error: no valid agents to ask."
+
+
+async def execute_agent_tool(asking_agent: dict, name: str, arguments_json: str) -> str:
+    """Dispatch a tool call to its handler; returns a result string."""
+    try:
+        args = json.loads(arguments_json or "{}")
+    except Exception:
+        return "error: tool arguments were not valid JSON."
+    if name == "message_human":
+        return await execute_message_human(asking_agent, args)
+    if name == "ask_agent":
+        return await execute_ask_agent(asking_agent, args)
+    return f"error: unknown tool '{name}'."
+
+
+async def ask_openclaw_with_tools(
+    asking_agent: dict, openclaw_model: str, message_text: str,
+    session_user: str, label: str = "",
+) -> str:
+    """
+    Invoke an OpenClaw agent with the agent-action tools available, running the
+    function-calling loop: if the model calls a tool, execute it, feed the result
+    back, and continue until it returns a normal reply (capped by MAX_TOOL_ITERS).
+    Falls back gracefully so a channel never sees a raw placeholder. `asking_agent`
+    is the agent record the tools act on behalf of.
+    """
+    model = f"openclaw/{openclaw_model}"
+    messages: list[dict] = [{"role": "user", "content": message_text}]
+    for _ in range(MAX_TOOL_ITERS):
+        try:
+            resp = await openclaw.chat.completions.create(
+                model=model, messages=messages, tools=AGENT_TOOLS,
+                tool_choice="auto", user=session_user,
+            )
+        except Exception:
+            log.exception("OpenClaw tool-call failed (%s)", label)
+            return OPENCLAW_GRACEFUL_FALLBACK
+        msg = resp.choices[0].message
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            content = msg.content or ""
+            return content if _is_real_reply(content) else OPENCLAW_GRACEFUL_FALLBACK
+        # Record the assistant's tool-call message, then run each tool.
+        messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in tool_calls
+            ],
+        })
+        for tc in tool_calls:
+            log.info("tool call (%s): %s %s", label, tc.function.name, tc.function.arguments)
+            result = await execute_agent_tool(
+                asking_agent, tc.function.name, tc.function.arguments
+            )
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+    log.warning("OpenClaw tool loop hit max iterations (%s)", label)
+    return OPENCLAW_GRACEFUL_FALLBACK
+
+
+# ============================================================
 #   DM file uploads
 #
 #   Rocket.Chat's outgoing webhook is TEXT-ONLY: it strips file
@@ -1112,11 +1356,14 @@ async def webhook(request: Request) -> dict:
             "calling OpenClaw as=%s model=%s session=%s message=%r",
             agent["agent_username"], openclaw_model, session_user, agent_input,
         )
-        # ask_openclaw_reliably retries once on the no-reply placeholder
-        # and otherwise returns a graceful fallback, so the agent never
-        # posts the raw 'No response from OpenClaw.' string into a channel.
-        reply = await ask_openclaw_reliably(
-            openclaw_model, agent_input, session_user,
+        # Invoke the agent WITH its action tools (message_human, ask_agent),
+        # running the tool-calling loop. A normal turn ignores the tools and
+        # just replies; the loop falls back gracefully so the agent never posts
+        # the raw 'No response from OpenClaw.' placeholder into a channel. (We
+        # don't retry the tool path: a retry could re-run a tool like
+        # message_human and double-send.)
+        reply = await ask_openclaw_with_tools(
+            agent, openclaw_model, agent_input, session_user,
             label=f"as {agent['agent_username']}",
         )
         log.info("OpenClaw reply (as %s): %r", agent["agent_username"], reply)
