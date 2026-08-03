@@ -100,6 +100,10 @@ services:
       BOT_USERNAME: ${BOT_USERNAME:-lois}
       ADMIN_USER_ID: ${ADMIN_USER_ID:-}
       ADMIN_PAT: ${ADMIN_PAT:-}
+      # Shared secret the glue requires on the inbound RC outgoing webhook (RC
+      # sends it in the body as `token`). Generated + set on the integration by
+      # scripts/install.sh. Empty => webhook is unauthenticated (logged at startup).
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:-}
       # Admin login name (defaults to "admin"); shown on the admin console so the
       # operator knows which account to use for Rocket.Chat administration too.
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
@@ -121,7 +125,12 @@ services:
       # Bind-mount the EXISTING OpenClaw's data dir so the join flow can write
       # agent workspaces and edit openclaw.json.
       - ${OPENCLAW_DATA_DIR:?set OPENCLAW_DATA_DIR in .env}:/openclaw_data
-      # Reload OpenClaw after config changes (v1 docker-restart strategy).
-      - /var/run/docker.sock:/var/run/docker.sock
       # Glue's own SQLite + state.
       - ./data/glue:/data
+      # NOTE: the Docker socket is NOT mounted here. It is only needed for the
+      # non-default OPENCLAW_RELOAD_STRATEGY=docker-restart, and mounting it gives
+      # this network-facing service root-equivalent control of the host. If you
+      # set that strategy, add the socket with the opt-in override:
+      #   docker compose -f docker-compose.portable.yml \
+      #     -f docker-compose.docker-restart.yml up -d
+      # The default OPENCLAW_RELOAD_STRATEGY=hotreload needs no socket.

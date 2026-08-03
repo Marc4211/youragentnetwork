@@ -89,6 +89,19 @@ AGENT_MODEL_ID = os.environ.get("AGENT_MODEL_ID", "openclaw/default")
 # scripts/setup-cron.sh). Empty => the /cron endpoint refuses every request.
 CRON_WEBHOOK_TOKEN = os.environ.get("CRON_WEBHOOK_TOKEN", "")
 
+# Shared secret for the Rocket.Chat outgoing webhook. RC includes the integration
+# token in the POST body as `token`; we verify it (constant-time) before acting on
+# any webhook, so a stranger who can reach :8000 cannot forge messages, impersonate
+# users, or drive agents. Set in .env and on the integration by scripts/install.sh.
+# Empty => the /webhook endpoint is UNAUTHENTICATED (a warning is logged at startup).
+WEBHOOK_TOKEN = os.environ.get("WEBHOOK_TOKEN", "")
+if not WEBHOOK_TOKEN:
+    log.warning(
+        "WEBHOOK_TOKEN is not set: the /webhook endpoint is UNAUTHENTICATED. Set "
+        "WEBHOOK_TOKEN in .env and on the Rocket.Chat outgoing integration "
+        "(fresh installs via scripts/install.sh do this automatically)."
+    )
+
 ROCKETCHAT_URL = os.environ.get("ROCKETCHAT_URL", "http://rocketchat:3000")
 ROCKETCHAT_PUBLIC_URL = os.environ.get(
     "ROCKETCHAT_PUBLIC_URL", "http://localhost:3000"
@@ -1205,7 +1218,22 @@ async def post_as_admin(channel_id: str, text: str) -> None:
 async def webhook(request: Request) -> dict:
     """Rocket.Chat outgoing webhook -> per-agent routing -> reply."""
     payload = await request.json()
-    log.info("webhook received: %s", payload)
+
+    # Verify the Rocket.Chat outgoing-webhook token (constant-time) before acting
+    # on anything. RC sends the integration's token in the body as `token`.
+    if WEBHOOK_TOKEN and not hmac.compare_digest(
+        str(payload.get("token") or ""), WEBHOOK_TOKEN
+    ):
+        # 200 with no work (not 401): an attacker learns nothing and RC's
+        # best-effort retries don't hammer us.
+        log.warning("webhook rejected: bad or missing token")
+        return {"received": True}
+
+    # Log without the shared token so it never lands in logs.
+    log.info(
+        "webhook received: %s",
+        {k: v for k, v in payload.items() if k != "token"},
+    )
 
     # --- loop prevention ---
     if payload.get("bot"):
@@ -2093,9 +2121,12 @@ async def restart_openclaw_container() -> None:
     """
     if not DOCKER_SOCKET.exists():
         raise RuntimeError(
-            f"Docker socket not found at {DOCKER_SOCKET}. Add a volume "
-            f"mount of /var/run/docker.sock to the glue container so it "
-            f"can trigger OpenClaw restarts."
+            f"Docker socket not found at {DOCKER_SOCKET}. OPENCLAW_RELOAD_STRATEGY "
+            f"is docker-restart but the socket is not mounted (it is not in the "
+            f"default stack for security). Bring the stack up with the opt-in "
+            f"override: docker compose -f docker-compose.portable.yml "
+            f"-f docker-compose.docker-restart.yml up -d, or use the default "
+            f"OPENCLAW_RELOAD_STRATEGY=hotreload."
         )
 
     transport = httpx.AsyncHTTPTransport(uds=str(DOCKER_SOCKET))

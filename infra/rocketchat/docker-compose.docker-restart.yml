@@ -1,0 +1,22 @@
+# Opt-in override: mount the Docker socket into the glue.
+#
+# ONLY needed when OPENCLAW_RELOAD_STRATEGY=docker-restart, i.e. your OpenClaw
+# does NOT hot-reload openclaw.json on its own and must be restarted after a new
+# agent is registered. The DEFAULT strategy (hotreload) needs no socket, so this
+# is not in the base stack.
+#
+# SECURITY: mounting /var/run/docker.sock gives the glue (a network-facing
+# service) root-equivalent control of the Docker host. Only enable it if you
+# actually need docker-restart, and keep the glue on a trusted network.
+#
+# Bring the stack up with BOTH files:
+#   docker compose -f docker-compose.portable.yml \
+#     -f docker-compose.docker-restart.yml up -d
+#
+# (Compose merges list fields like `volumes`, so this appends the socket mount
+# to the glue service defined in docker-compose.portable.yml.)
+
+services:
+  glue:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

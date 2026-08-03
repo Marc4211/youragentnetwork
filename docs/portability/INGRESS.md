@@ -25,7 +25,13 @@ Binds to `0.0.0.0`; teammates on the same network reach it at the host's LAN IP
 (the installer detects it and sets `ROOT_URL=http://<lan-ip>:3000`).
 
 Best for: an always-on box in the office, everyone on the same Wi-Fi/VLAN.
-Note: only expose to networks you trust - there is no TLS in this profile.
+
+> **Trusted private networks only.** `0.0.0.0` listens on *every* interface, so on
+> a host that also has a **public IP** (any cloud VM), this exposes `:3000` and
+> `:8000` - including the admin console and the webhook - to the **public
+> internet**, with no TLS and no firewall. On such hosts use `tailscale` (binds
+> the tailnet IP only) or put a host firewall in front of `:3000`/`:8000`. The
+> installer warns if it detects a public IP under this profile.
 
 ### `tailscale` - private mesh, nothing public
 Reachable only to devices on your Tailscale tailnet, by the host's MagicDNS name

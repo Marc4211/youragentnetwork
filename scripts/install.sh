@@ -33,6 +33,7 @@ GLUE_LOCAL="http://localhost:8000"
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
+warn() { printf '\033[33m!!  %s\033[0m\n' "$*" >&2; }
 die()  { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 # --- 1. preflight ------------------------------------------------------------
@@ -118,13 +119,30 @@ fi
 
 # --- 2c. ingress profile: where the chat is reachable -----------------------
 # loopback (default): 127.0.0.1, reach via SSH tunnel.
-# lan:       0.0.0.0, reach at the host's LAN IP.
-# tailscale: 0.0.0.0, reach at the host's Tailscale MagicDNS name (private mesh).
+# lan:       0.0.0.0, reach at the host's LAN IP (trusted private networks only).
+# tailscale: the tailnet IP only, reach at the host's Tailscale MagicDNS name.
 say "Ingress profile"
 INGRESS="$(get_env INGRESS_PROFILE)"; INGRESS="${INGRESS:-loopback}"
 case "$INGRESS" in
   loopback) BIND=127.0.0.1; HOST_ADDR=localhost ;;
-  lan)      BIND=0.0.0.0;   HOST_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')" ;;
+  lan)
+    BIND=0.0.0.0
+    HOST_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    # 0.0.0.0 listens on EVERY interface. On a host that also has a PUBLIC IP,
+    # that exposes :3000 and :8000 (incl. the webhook + admin console) to the
+    # internet, and we set up no firewall. Detect a public IPv4 and warn loudly.
+    PUBIP="$(hostname -I 2>/dev/null | tr ' ' '\n' \
+      | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' \
+      | grep -vE '^(10\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)' \
+      | head -1)"
+    if [ -n "$PUBIP" ]; then
+      warn "INGRESS_PROFILE=lan binds 0.0.0.0 and this host has a PUBLIC IP ($PUBIP)."
+      warn "Rocket.Chat (:3000) and the admin/webhook service (:8000) will be reachable"
+      warn "from the PUBLIC INTERNET, with no firewall. Prefer INGRESS_PROFILE=tailscale"
+      warn "(binds the tailnet IP only), or restrict :3000/:8000 with a host firewall."
+      warn "See docs/portability/INGRESS.md."
+    fi
+    ;;
   tailscale)
     # Bind to the tailscale interface IP only, so the chat is reachable on the
     # tailnet but NOT on a public interface (important on cloud hosts).
@@ -207,15 +225,29 @@ BOT_TOK="$(printf '%s' "$BL" | python3 -c 'import sys,json;print(json.load(sys.s
 [ -n "$BOT_ID" ] && [ -n "$BOT_TOK" ] || die "bot login failed."
 info "bot token acquired"
 
-# --- 6. ensure outgoing webhook -> glue -------------------------------------
+# --- 6. ensure outgoing webhook -> glue (token-authenticated) ---------------
+# The glue verifies a shared token (RC sends it in the outgoing-webhook body as
+# `token`) so a stranger who can reach :8000 cannot forge webhook calls. Generate
+# it once, keep it in .env, and set the SAME value on the integration here.
 say "Step 6/7: outgoing webhook -> glue"
-HAVE_HOOK="$(curl -s -H "X-Auth-Token:$ADMIN_TOK" -H "X-User-Id:$ADMIN_ID" "$RC_LOCAL/api/v1/integrations.list" \
-  | python3 -c 'import sys,json;print(sum(1 for i in json.load(sys.stdin).get("integrations",[]) if i.get("name")=="glue"))' 2>/dev/null || echo 0)"
-if [ "$HAVE_HOOK" = 0 ]; then
-  rc_admin "$RC_LOCAL/api/v1/integrations.create" -d "{\"type\":\"webhook-outgoing\",\"name\":\"glue\",\"enabled\":true,\"username\":\"$ADMIN_USERNAME\",\"event\":\"sendMessage\",\"urls\":[\"http://glue:8000/webhook\"],\"channel\":\"all_public_channels,all_direct_messages\",\"scriptEnabled\":false}" \
-    | grep -q '"success":true' && info "webhook created" || die "webhook creation failed"
-else
-  info "webhook already present"
+[ -n "$(get_env WEBHOOK_TOKEN)" ] || set_env WEBHOOK_TOKEN "$(openssl rand -hex 24)"
+WEBHOOK_TOKEN="$(get_env WEBHOOK_TOKEN)"
+HOOK_ID="$(curl -s -H "X-Auth-Token:$ADMIN_TOK" -H "X-User-Id:$ADMIN_ID" "$RC_LOCAL/api/v1/integrations.list" \
+  | python3 -c 'import sys,json;ints=json.load(sys.stdin).get("integrations",[]);print(next((i["_id"] for i in ints if i.get("name")=="glue"),""))' 2>/dev/null || echo "")"
+HOOK_FIELDS="\"type\":\"webhook-outgoing\",\"name\":\"glue\",\"enabled\":true,\"username\":\"$ADMIN_USERNAME\",\"event\":\"sendMessage\",\"urls\":[\"http://glue:8000/webhook\"],\"channel\":\"all_public_channels,all_direct_messages\",\"scriptEnabled\":false,\"token\":\"$WEBHOOK_TOKEN\""
+# Rocket.Chat has no integrations.update endpoint, so if one already exists we
+# remove it and recreate it carrying the token (keeps upgrades/re-runs working).
+if [ -n "$HOOK_ID" ]; then
+  rc_admin "$RC_LOCAL/api/v1/integrations.remove" -d "{\"integrationId\":\"$HOOK_ID\",\"type\":\"webhook-outgoing\"}" >/dev/null || true
+fi
+rc_admin "$RC_LOCAL/api/v1/integrations.create" -d "{$HOOK_FIELDS}" \
+  | grep -q '"success":true' && info "webhook set (token-authenticated)" || die "webhook creation failed"
+if [ -n "$HOOK_ID" ]; then
+  # Upgrade case: Rocket.Chat can keep the just-removed (tokenless) integration in
+  # its in-memory cache and briefly deliver each message twice (the stale copy is
+  # rejected by the glue, so nothing double-processes). It clears on the next RC
+  # restart; restart Rocket.Chat if you want the duplicate deliveries to stop now.
+  info "note: on upgrades, restart Rocket.Chat to drop the old cached webhook."
 fi
 
 # --- 7. write creds to .env + bring up the glue -----------------------------
