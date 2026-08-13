@@ -75,7 +75,13 @@ ensure_env ADMIN_PASS               "Admin password (min 14 chars)" secret
 ensure_env OPENCLAW_GATEWAY_URL     "Existing OpenClaw gateway URL (e.g. http://openclaw-gateway:18789)"
 ensure_env OPENCLAW_GATEWAY_TOKEN   "OpenClaw gateway token" secret
 ensure_env OPENCLAW_DATA_DIR        "OpenClaw data dir on this host (e.g. /root/.openclaw)"
-ensure_env OPENCLAW_CONTAINER_NAME  "OpenClaw container name (e.g. openclaw-openclaw-gateway-1)"
+# OPENCLAW_CONTAINER_NAME is only used by the docker-restart reload strategy; the
+# default (hotreload) never touches the container, so only require it then. This
+# lets a native (non-Docker) OpenClaw install through without a bogus value.
+RELOAD="$(get_env OPENCLAW_RELOAD_STRATEGY)"; RELOAD="${RELOAD:-hotreload}"
+if [ "$RELOAD" = docker-restart ]; then
+  ensure_env OPENCLAW_CONTAINER_NAME "OpenClaw container name (e.g. openclaw-openclaw-gateway-1)"
+fi
 # Sensible defaults if absent.
 [ -n "$(get_env ADMIN_USERNAME)" ] || set_env ADMIN_USERNAME admin
 [ -n "$(get_env BOT_USERNAME)" ]   || set_env BOT_USERNAME lois

@@ -27,9 +27,9 @@ OpenClaw, never in this stack.
 
 If any precondition fails, stop and report it. Don't try to install OpenClaw.
 
-## The 7 required values
+## The required values
 
-The installer reads `infra/rocketchat/.env`. Seven values are required. It will
+The installer reads `infra/rocketchat/.env`. Six values are required. It will
 stop and name any that's missing, so you never have to guess.
 
 | Key | What to set | How to find it |
@@ -40,16 +40,12 @@ stop and name any that's missing, so you never have to guess.
 | `OPENCLAW_GATEWAY_URL` | Gateway URL the glue reaches | Default `http://host.docker.internal:18789` works when OpenClaw publishes its gateway port on the host |
 | `OPENCLAW_GATEWAY_TOKEN` | OpenClaw gateway token | From the operator's OpenClaw `.env` (often `~/.openclaw/.env`) |
 | `OPENCLAW_DATA_DIR` | Host path of OpenClaw's data dir (the one holding `openclaw.json`) | e.g. `~/.openclaw` or `/root/.openclaw` |
-| `OPENCLAW_CONTAINER_NAME` | OpenClaw's Docker container name | `docker ps` to find it. **If OpenClaw runs natively (not Docker)** and you're on the default reload strategy, this value isn't used but still must be non-empty, so set it to `none` |
-
-> **Gotcha to know:** `OPENCLAW_CONTAINER_NAME` is required by the installer, but
-> the example file leaves it commented out. Add it yourself, or the installer will
-> stop and ask for it.
 
 Optional, with sensible defaults:
 
+- `OPENCLAW_RELOAD_STRATEGY`: how a new agent is applied. `hotreload` (default, OpenClaw watches `openclaw.json`) `|` `docker-restart` `|` `none`.
+- `OPENCLAW_CONTAINER_NAME`: **only required when `OPENCLAW_RELOAD_STRATEGY=docker-restart`**, so the installer can restart the OpenClaw container. Find it with `docker ps`. On the default `hotreload`, leave it unset. A native (non-Docker) OpenClaw never needs it.
 - `INGRESS_PROFILE`: `loopback` (default, nothing exposed, reach via SSH tunnel) `|` `lan` `|` `tailscale`. See [docs/portability/INGRESS.md](docs/portability/INGRESS.md).
-- `OPENCLAW_RELOAD_STRATEGY`: `hotreload` (default) `|` `docker-restart` `|` `none`.
 - `ADMIN_USERNAME`: defaults to `admin`.
 
 The installer generates everything else for you (admin and bot tokens, bind
@@ -66,7 +62,7 @@ address, public URLs, the webhook token). **Don't set those.**
    ```
    cp infra/rocketchat/.env.portable.example infra/rocketchat/.env
    ```
-3. **Set the 7 required values** in `infra/rocketchat/.env`. This file is
+3. **Set the required values** in `infra/rocketchat/.env`. This file is
    gitignored. **Never commit it:** it holds the OpenClaw token.
 4. **Run the installer.** It's non-interactive and safe to re-run:
    ```
