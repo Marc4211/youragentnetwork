@@ -63,7 +63,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from openai import AsyncOpenAI
 
 from a2a_client import ask_a2a_agent
@@ -3127,6 +3127,34 @@ def active_team_link() -> dict | None:
     return None
 
 
+def _invite_public(inv: dict) -> dict:
+    """A JSON-safe view of an invite row: computed status + the full join link.
+
+    Used by the agent-facing GET endpoints and the JSON create response so a
+    caller never has to scrape the HTML console to get an invite's link."""
+    now = int(time.time())
+    expired = bool(inv.get("expires_at")) and inv["expires_at"] < now
+    reusable = bool(inv.get("reusable"))
+    if expired:
+        status = "expired"
+    elif not reusable and inv.get("used_at"):
+        status = "used"
+    else:
+        status = "active"
+    return {
+        "token": inv["token"],
+        "email": inv.get("email"),
+        "reusable": reusable,
+        "status": status,
+        "created_at": inv.get("created_at"),
+        "expires_at": inv.get("expires_at"),
+        "used_at": inv.get("used_at"),
+        "used_by": inv.get("used_by"),
+        "uses": inv.get("uses", 0),
+        "link": f"{JOIN_PUBLIC_URL}/join?invite={inv['token']}",
+    }
+
+
 # --- admin auth: HTTP Basic verified against the Rocket.Chat admin account ---
 _admin_cache: dict[str, tuple[bool, float]] = {}
 
@@ -3457,16 +3485,42 @@ async def admin_remove_agent(
         return RedirectResponse(f"/admin?err={quote(str(exc))}", status_code=303)
 
 
+@app.get("/admin/invites")
+async def admin_list_invites(request: Request):
+    """JSON list of invites plus the active team link, for agent-driven control."""
+    if not await require_admin(request):
+        return _admin_challenge()
+    team = active_team_link()
+    return JSONResponse({
+        "invites": [_invite_public(i) for i in list_invites()],
+        "team_link": _invite_public(team) if team else None,
+    })
+
+
+@app.get("/admin/people")
+async def admin_list_people(request: Request):
+    """JSON list of people and their agents, for agent-driven control."""
+    if not await require_admin(request):
+        return _admin_challenge()
+    return JSONResponse({"people": list_people()})
+
+
 @app.post("/admin/invites")
 async def admin_create_invite(
     request: Request,
     email: Annotated[str, Form()] = "",
     ttl_days: Annotated[int, Form()] = 7,
 ):
-    """Create a single-use invite for one person."""
+    """Create a single-use invite for one person.
+
+    Returns JSON with the token + join link when the caller sends
+    `Accept: application/json` (so an agent can read the link back); otherwise
+    redirects to the console, which is what the browser form expects."""
     if not await require_admin(request):
         return _admin_challenge()
-    create_invite(email.strip().lower() or None, ttl_days, reusable=False)
+    token = create_invite(email.strip().lower() or None, ttl_days, reusable=False)
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse(_invite_public(get_invite(token)), status_code=201)
     return RedirectResponse("/admin", status_code=303)
 
 

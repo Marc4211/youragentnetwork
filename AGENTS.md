@@ -96,47 +96,67 @@ invites and the team link, and check health.
 `.env`). The base URL is the glue admin port, e.g. `http://localhost:8000` on the
 box (or your host address on the LAN / Tailscale profile).
 
-These endpoints were built for the browser console, so each replies with a **303
-redirect** back to `/admin`, and the result is in the `Location` header as
-`?ok=<message>` or `?err=<message>`. Run curl with `-i` and read that header.
+### Read (JSON)
 
 ```bash
 # Health (no auth)
 curl -s http://localhost:8000/health                      # -> {"status":"ok"}
 
-# Team link: turn the shared join link on / off
+# List invites (+ the active team link); each invite carries its full join link
+curl -s -u "$ADMIN_USER:$ADMIN_PASS" http://localhost:8000/admin/invites
+
+# List people and their agents
+curl -s -u "$ADMIN_USER:$ADMIN_PASS" http://localhost:8000/admin/people
+```
+
+`GET /admin/invites` returns `{"invites": [...], "team_link": {...} | null}`. Each
+invite has `token`, `email`, `reusable`, `status` (`active` / `used` / `expired`),
+timestamps, `uses`, and a ready-to-send `link`. So you never have to scrape the
+HTML console to get an invite URL.
+
+### Change
+
+Create a single-use invite and get its link back as JSON. Send
+`Accept: application/json`; without it you get the console's 303 redirect instead.
+
+```bash
+curl -s -u "$ADMIN_USER:$ADMIN_PASS" -H "Accept: application/json" \
+  -X POST http://localhost:8000/admin/invites \
+  --data-urlencode "email=alex@example.com" --data-urlencode "ttl_days=7"
+# -> {"token":"...","link":"http://<host>:8000/join?invite=...","status":"active",...}
+```
+
+The remaining change endpoints were built for the console, so they reply with a
+**303 redirect** to `/admin` with the result in the `Location` header (`?ok=` /
+`?err=`). Run curl with `-i` to read it, then call `GET /admin/invites` for the
+new state.
+
+```bash
+# Team link: turn the shared join link on / off (then GET /admin/invites for its URL)
 curl -i -u "$ADMIN_USER:$ADMIN_PASS" -X POST http://localhost:8000/admin/team-link/on
 curl -i -u "$ADMIN_USER:$ADMIN_PASS" -X POST http://localhost:8000/admin/team-link/off
 
-# Invites: create a single-use invite (email + ttl_days both optional)
-curl -i -u "$ADMIN_USER:$ADMIN_PASS" -X POST http://localhost:8000/admin/invites \
-  --data-urlencode "email=alex@example.com" --data-urlencode "ttl_days=7"
 # Revoke an invite by its token
 curl -i -u "$ADMIN_USER:$ADMIN_PASS" -X POST http://localhost:8000/admin/invites/revoke \
   --data-urlencode "token=<invite-token>"
 
-# External A2A agents: add one by its agent-card URL (name + bearer optional)
+# External A2A agents: add by agent-card URL (name + bearer optional), or remove by username
 curl -i -u "$ADMIN_USER:$ADMIN_PASS" -X POST http://localhost:8000/admin/agents/add \
   --data-urlencode "card_url=https://partner.example.com/.well-known/agent-card.json" \
   --data-urlencode "name=Partner Bot"
-# Remove one by its username
 curl -i -u "$ADMIN_USER:$ADMIN_PASS" -X POST http://localhost:8000/admin/agents/remove \
   --data-urlencode "username=partner-bot"
 ```
 
-**Know the limits (so you don't assume more than's there):**
+### Shell ops
 
-- These are form endpoints with redirect responses, **not a JSON API**. Parse the
-  `Location` header for `ok=` / `err=`.
-- There's **no JSON list endpoint yet**. To read current invites or people, or to
-  grab a freshly created invite's link, load the `/admin` console (HTML) or read
-  the `invites` table in the glue's SQLite DB.
-- The other half of operating it is at the shell (tail logs, redeploy the glue,
-  or re-run `bash scripts/install.sh` to apply a changed value):
-  ```bash
-  cd infra/rocketchat && docker compose -f docker-compose.portable.yml logs -f glue
-  cd infra/rocketchat && docker compose -f docker-compose.portable.yml up -d --build glue
-  ```
+The other half of operating it is at the shell: tail logs, redeploy the glue, or
+re-run `bash scripts/install.sh` to apply a changed value.
+
+```bash
+cd infra/rocketchat && docker compose -f docker-compose.portable.yml logs -f glue
+cd infra/rocketchat && docker compose -f docker-compose.portable.yml up -d --build glue
+```
 
 ## Good to know
 
