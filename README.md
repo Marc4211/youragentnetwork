@@ -49,6 +49,10 @@ The installer never blocks on a prompt. If a value is missing it exits naming th
 exact key, so an agent fills it in and re-runs until it's done. It's an agent
 deploying the agent platform, on the OpenClaw you already run.
 
+Install isn't the end of it: AGENTS.md also covers **operating** the instance with
+an agent, adding or removing agents, managing invites and the team link, and
+checking health over the admin API.
+
 ## How people join
 
 From the admin console (`/admin`, signed in with your Rocket.Chat admin account):
