@@ -38,6 +38,17 @@ The journey: **discover → run one command → finish in the browser wizard →
 your team.** See [docs/portability/INGRESS.md](docs/portability/INGRESS.md) for how
 teammates reach the chat (loopback / LAN / Tailscale).
 
+## Deploy with an agent
+
+The whole install is **one config file plus one non-interactive script**, so an
+AI agent can stand this up for you. Point Claude (or your own OpenClaw agent, if
+it has shell access on the box) at **[AGENTS.md](AGENTS.md)**. It's a precise run
+book: fill `infra/rocketchat/.env`, run `scripts/install.sh`, done.
+
+The installer never blocks on a prompt. If a value is missing it exits naming the
+exact key, so an agent fills it in and re-runs until it's done. It's an agent
+deploying the agent platform, on the OpenClaw you already run.
+
 ## How people join
 
 From the admin console (`/admin`, signed in with your Rocket.Chat admin account):
